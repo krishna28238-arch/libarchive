@@ -1011,6 +1011,15 @@ static int read_var_sized(struct archive_read* a, size_t* pvalue,
 				   : read_var(a, &v, NULL);
 
 	if(ret == 1 && pvalue) {
+		/* Values larger than SIZE_MAX would be truncated by the
+		 * cast below, which a crafted archive can use to bypass
+		 * length checks on 32-bit systems (GH #3066). */
+		if(v > (uint64_t)SIZE_MAX) {
+			archive_set_error(&a->archive,
+			    ARCHIVE_ERRNO_FILE_FORMAT,
+			    "varint value is too large");
+			return 0;
+		}
 		*pvalue = (size_t) v;
 	}
 
@@ -1537,6 +1546,7 @@ static int parse_file_extra_owner(struct archive_read* a,
 {
 	uint64_t flags = 0;
 	uint64_t value_size = 0;
+	uint64_t name_size_64 = 0;
 	uint64_t id = 0;
 	size_t name_len = 0;
 	size_t name_size = 0;
@@ -1551,18 +1561,22 @@ static int parse_file_extra_owner(struct archive_read* a,
 	*extra_data_size -= value_size;
 
 	if ((flags & OWNER_USER_NAME) != 0) {
-		if(!read_var_sized(a, &name_size, &varint_len))
+		if(!read_var(a, &name_size_64, &value_size))
 			return ARCHIVE_EOF;
 
 		/* The name cannot be larger than the remaining extra data of
 		 * this field. Rejecting an oversized length here also avoids
-		 * requesting a huge allocation from read_ahead() below. */
+		 * requesting a huge allocation from read_ahead() below.
+		 * Comparing the untruncated value makes this work on 32-bit
+		 * systems as well (GH #3066). */
 		if(*extra_data_size < 0 ||
-		    name_size > (uint64_t)*extra_data_size) {
+		    name_size_64 > (uint64_t)*extra_data_size) {
 			archive_set_error(&a->archive,
 			    ARCHIVE_ERRNO_FILE_FORMAT, "Owner name is too long");
 			return ARCHIVE_FATAL;
 		}
+		name_size = (size_t)name_size_64;
+		varint_len = (size_t)value_size;
 		if(ARCHIVE_OK != consume(a, (int64_t)varint_len))
 			return ARCHIVE_EOF;
 		*extra_data_size -= (int64_t)(name_size + varint_len);
@@ -1584,15 +1598,18 @@ static int parse_file_extra_owner(struct archive_read* a,
 		archive_entry_set_uname(e, namebuf);
 	}
 	if ((flags & OWNER_GROUP_NAME) != 0) {
-		if(!read_var_sized(a, &name_size, &varint_len))
+		if(!read_var(a, &name_size_64, &value_size))
 			return ARCHIVE_EOF;
 
+		/* Same check as for the user name above. */
 		if(*extra_data_size < 0 ||
-		    name_size > (uint64_t)*extra_data_size) {
+		    name_size_64 > (uint64_t)*extra_data_size) {
 			archive_set_error(&a->archive,
 			    ARCHIVE_ERRNO_FILE_FORMAT, "Group name is too long");
 			return ARCHIVE_FATAL;
 		}
+		name_size = (size_t)name_size_64;
+		varint_len = (size_t)value_size;
 		if(ARCHIVE_OK != consume(a, (int64_t)varint_len))
 			return ARCHIVE_EOF;
 		*extra_data_size -= (int64_t)(name_size + varint_len);
@@ -1755,6 +1772,7 @@ static int process_head_file(struct archive_read* a, struct rar5 *rar5,
 {
 	int64_t extra_data_size = 0;
 	size_t data_size = 0;
+	uint64_t data_size_64 = 0;
 	size_t file_flags = 0;
 	size_t file_attr = 0;
 	size_t compression_info = 0;
@@ -1803,15 +1821,18 @@ static int process_head_file(struct archive_read* a, struct rar5 *rar5,
 	}
 
 	if(block_flags & HFL_DATA) {
-		if(!read_var_sized(a, &data_size, NULL))
+		if(!read_var(a, &data_size_64, NULL))
 			return ARCHIVE_EOF;
 
-		if(data_size > SSIZE_MAX) {
+		/* Comparing the untruncated value makes this work on
+		 * 32-bit systems as well. */
+		if(data_size_64 > (uint64_t)SSIZE_MAX) {
 			archive_set_error(&a->archive,
 			    ARCHIVE_ERRNO_FILE_FORMAT,
 			    "File data size is too large");
 			return ARCHIVE_FATAL;
 		}
+		data_size = (size_t)data_size_64;
 
 		rar5->file.bytes_remaining = data_size;
 	} else {
@@ -2323,6 +2344,8 @@ static int process_base_block(struct archive_read* a,
 	struct rar5 *rar5 = a->format->data;
 	uint32_t hdr_crc, computed_crc;
 	size_t raw_hdr_size = 0, hdr_size_len, hdr_size;
+	uint64_t raw_hdr_size_64 = 0;
+	uint64_t hdr_size_len_64 = 0;
 	size_t header_id = 0;
 	size_t header_flags = 0;
 	const uint8_t* p;
@@ -2346,19 +2369,23 @@ static int process_base_block(struct archive_read* a,
 	}
 
 	/* Read header size. */
-	if(!read_var_sized(a, &raw_hdr_size, &hdr_size_len)) {
+	if(!read_var(a, &raw_hdr_size_64, &hdr_size_len_64)) {
 		return ARCHIVE_EOF;
 	}
+	hdr_size_len = (size_t)hdr_size_len_64;
 
 	/* Sanity check, maximum header size for RAR5 is 2MB.  Bounding
 	 * raw_hdr_size (instead of the sum) also ensures that adding
-	 * hdr_size_len below cannot wrap hdr_size around SIZE_MAX. */
-	if(raw_hdr_size > (2 * 1024 * 1024) - hdr_size_len) {
+	 * hdr_size_len below cannot wrap hdr_size around SIZE_MAX.
+	 * Comparing the untruncated value makes this work on 32-bit
+	 * systems as well. */
+	if(raw_hdr_size_64 > (2 * 1024 * 1024) - hdr_size_len_64) {
 		archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
 		    "Base block header is too large");
 
 		return ARCHIVE_FATAL;
 	}
+	raw_hdr_size = (size_t)raw_hdr_size_64;
 
 	hdr_size = raw_hdr_size + hdr_size_len;
 
