@@ -1,0 +1,36 @@
+name: 32-bit (i386) build and test
+
+on: [push, pull_request]
+
+jobs:
+  i386:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Register qemu-user binfmt handlers
+        run: docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+
+      - name: Build and run the test suite on i386
+        run: |
+          docker run --rm --platform linux/386 \
+            -v "$PWD":/src -w /src \
+            debian:bookworm \
+            bash -c '
+              set -e
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends \
+                build-essential cmake ninja-build pkg-config file \
+                zlib1g-dev libbz2-dev liblzma-dev liblz4-dev libzstd-dev \
+                libxml2-dev libacl1-dev
+              cmake -S . -B build -G Ninja \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DENABLE_TEST=ON \
+                -DCMAKE_C_FLAGS="-Wall -Wextra"
+              ninja -C build
+              echo "== 32-bit userspace check =="
+              file build/bin/libarchive_test | grep -i "32-bit" || \
+                file build/bin/bsdtar | grep -i "32-bit"
+              # absolute refdir: a relative -r path breaks reference-based tests
+              build/bin/libarchive_test -r /src/libarchive/test
+            '
