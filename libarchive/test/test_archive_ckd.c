@@ -204,3 +204,41 @@ DEFINE_TEST(test_archive_ckd_sub_i64)
 	assert(archive_ckd_sub_i64(&r, INT64_MAX, -1) != 0);
 	assert(archive_ckd_sub_i64(&r, 0, INT64_MIN) != 0);
 }
+
+DEFINE_TEST(test_archive_ckd_sub_size)
+{
+	size_t r;
+
+	assert(archive_ckd_sub_size(&r, 0, 0) == 0);
+	assertEqualInt(0, r);
+
+	assert(archive_ckd_sub_size(&r, 10, 3) == 0);
+	assertEqualInt(7, r);
+
+	/* Exact zero is representable. */
+	assert(archive_ckd_sub_size(&r, 5, 5) == 0);
+	assertEqualInt(0, r);
+
+	assert(archive_ckd_sub_size(&r, SIZE_MAX, SIZE_MAX) == 0);
+	assertEqualInt(0, r);
+
+	/* Underflow must be reported, not wrapped to a huge value. */
+	assert(archive_ckd_sub_size(&r, 0, 1) != 0);
+	assert(archive_ckd_sub_size(&r, 4, 5) != 0);
+	assert(archive_ckd_sub_size(&r, SIZE_MAX - 1, SIZE_MAX) != 0);
+}
+
+DEFINE_TEST(test_archive_ckd_sub_u64)
+{
+	uint64_t r;
+
+	assert(archive_ckd_sub_u64(&r, 10, 3) == 0);
+	assertEqualInt(7, r);
+
+	assert(archive_ckd_sub_u64(&r, UINT64_MAX, UINT64_MAX) == 0);
+	assertEqualInt(0, r);
+
+	/* Underflow must be reported, not wrapped. */
+	assert(archive_ckd_sub_u64(&r, 0, 1) != 0);
+	assert(archive_ckd_sub_u64(&r, 0x1234, 0x1235) != 0);
+}

@@ -247,6 +247,47 @@ archive_ckd_sub_i64(int64_t *result, int64_t a, int64_t b)
 #endif
 }
 
+/* Returns 0 on success, a non-zero value otherwise. */
+static inline int
+archive_ckd_sub_size(size_t *result, size_t a, size_t b)
+{
+#if USE_STDCKDINT
+	return ckd_sub(result, a, b);
+#elif USE_BUILTIN
+	return __builtin_sub_overflow(a, b, result);
+#elif USE_INTSAFE
+	return SizeTSub(a, b, result);
+#else
+	if (a < b)
+		return 1;
+	*result = a - b;
+	return 0;
+#endif
+}
+
+/* Returns 0 on success, a non-zero value otherwise. */
+static inline int
+archive_ckd_sub_u64(uint64_t *result, uint64_t a, uint64_t b)
+{
+#if USE_STDCKDINT
+	return ckd_sub(result, a, b);
+#elif USE_BUILTIN
+	return __builtin_sub_overflow(a, b, result);
+#elif USE_INTSAFE
+	ULONGLONG res;
+	int ret;
+
+	ret = ULongLongSub(a, b, &res);
+	*result = (uint64_t)res;
+	return ret;
+#else
+	if (a < b)
+		return 1;
+	*result = a - b;
+	return 0;
+#endif
+}
+
 #if !defined(TIME_MAX)
 #define TIME_MAX (((time_t)0 < (time_t)-1) ? (time_t)~0 :		\
 	    sizeof(time_t) == sizeof(long long) ? (time_t)LLONG_MAX :	\
